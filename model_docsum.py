@@ -121,7 +121,7 @@ def sentence_extractor_seqrnn_docatt(sents_ext, encoder_outputs, encoder_state, 
     return extractor_outputs, logits
 
 
-def policy_network(vocab_embed_variable, document_placeholder, label_placeholder):
+def policy_network(bert_module, document_placeholder, segment_placeholder, mask_placeholder, label_placeholder):
     """Build the policy core network.
     Args:
     vocab_embed_variable: [vocab_size, FLAGS.wordembed_size], embeddings without PAD and UNK
@@ -134,22 +134,34 @@ def policy_network(vocab_embed_variable, document_placeholder, label_placeholder
     with tf.variable_scope('PolicyNetwork') as scope:
         
         ### Full Word embedding Lookup Variable
-        # PADDING embedding non-trainable 
-        pad_embed_variable = variable_on_cpu("pad_embed", [1, FLAGS.wordembed_size], tf.constant_initializer(0), trainable=False)
-        # UNK embedding trainable
-        unk_embed_variable = variable_on_cpu("unk_embed", [1, FLAGS.wordembed_size], tf.constant_initializer(0), trainable=True)     
-        # Get fullvocab_embed_variable
-        fullvocab_embed_variable = tf.concat([pad_embed_variable, unk_embed_variable, vocab_embed_variable], 0)
-        # print(fullvocab_embed_variable)
+#         # PADDING embedding non-trainable 
+#         pad_embed_variable = variable_on_cpu("pad_embed", [1, FLAGS.wordembed_size], tf.constant_initializer(0), trainable=False)
+#         # UNK embedding trainable
+#         unk_embed_variable = variable_on_cpu("unk_embed", [1, FLAGS.wordembed_size], tf.constant_initializer(0), trainable=True)     
+#         # Get fullvocab_embed_variable
+#         fullvocab_embed_variable = tf.concat([pad_embed_variable, unk_embed_variable, vocab_embed_variable], 0)
+#         # print(fullvocab_embed_variable)
         
-        ### Lookup layer
-        with tf.variable_scope('Lookup') as scope:
-            document_placeholder_flat = tf.reshape(document_placeholder, [-1])
-            document_word_embedding = tf.nn.embedding_lookup(fullvocab_embed_variable, document_placeholder_flat, name="Lookup")
+#         ### Lookup layer
+#         with tf.variable_scope('Lookup') as scope:
+#             document_placeholder_flat = tf.reshape(document_placeholder, [-1])
+#             document_word_embedding = tf.nn.embedding_lookup(fullvocab_embed_variable, document_placeholder_flat, name="Lookup")
+#             document_word_embedding = tf.reshape(document_word_embedding, [-1, (FLAGS.max_doc_length + FLAGS.max_title_length + FLAGS.max_image_length), 
+#                                                                            FLAGS.max_sent_length, FLAGS.wordembed_size])
+#             # print(document_word_embedding) 
+        ### Bert Embedding Layer
+        with tf.variable_scope('Bert_Lookup') as scope:
+            document_placeholder_flat = tf.reshape(document_placeholder, [-1, FLAGS.max_sent_length])
+            segment_placeholder_flat = tf.reshape(document_placeholder, [-1, FLAGS.max_sent_length])
+            mask_placeholder_flat = tf.reshape(document_placeholder, [-1, FLAGS.max_sent_length])
+            bert_inputs = dict(
+                input_ids=document_placeholder_flat,
+                input_mask=segment_placeholder_flat,
+                segment_ids=mask_placeholder_flat)
+            bert_outputs = bert_module(bert_inputs, signature="tokens", as_dict=True)
+            document_word_embedding = bert_outputs["sequence_output"]
             document_word_embedding = tf.reshape(document_word_embedding, [-1, (FLAGS.max_doc_length + FLAGS.max_title_length + FLAGS.max_image_length), 
-                                                                           FLAGS.max_sent_length, FLAGS.wordembed_size])
-            # print(document_word_embedding) 
-          
+                                                                            FLAGS.max_sent_length, FLAGS.wordembed_size])
         ### Convolution Layer
         with tf.variable_scope('ConvLayer') as scope:
             document_word_embedding = tf.reshape(document_word_embedding, [-1, FLAGS.max_sent_length, FLAGS.wordembed_size])

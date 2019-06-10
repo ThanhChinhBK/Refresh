@@ -20,6 +20,7 @@ import os
 import random
 import sys
 import time
+import pickle
 
 import numpy as np
 import tensorflow as tf
@@ -41,8 +42,10 @@ def batch_predict_with_a_model(data, model, session=None):
   step = 1
   while (step * FLAGS.batch_size) <= len(data.fileindices):
     # Get batch data as Numpy Arrays : Without shuffling
-    batch_docnames, batch_docs, batch_label, batch_weight, batch_oracle_multiple, batch_reward_multiple = data.get_batch(((step-1)*FLAGS.batch_size), (step * FLAGS.batch_size))
-    batch_logits = session.run(model.logits, feed_dict={model.document_placeholder: batch_docs})
+    batch_docnames, batch_docs, batch_segments, batch_masks, batch_label, batch_weight, batch_oracle_multiple, batch_reward_multiple = data.get_batch(((step-1)*FLAGS.batch_size), (step * FLAGS.batch_size))
+    batch_logits = session.run(model.logits, feed_dict={model.document_placeholder: batch_docs,
+                                                       model.segment_placeholder: batch_segments,
+                                                     model.mask_placeholder: batch_masks})
     
     data_logits.append(batch_logits)
     data_labels.append(batch_label)
@@ -54,8 +57,10 @@ def batch_predict_with_a_model(data, model, session=None):
   # Check if any data left
   if (len(data.fileindices) > ((step-1)*FLAGS.batch_size)):
     # Get last batch as Numpy Arrays
-    batch_docnames, batch_docs, batch_label, batch_weight, batch_oracle_multiple, batch_reward_multiple = data.get_batch(((step-1)*FLAGS.batch_size), len(data.fileindices))
-    batch_logits = session.run(model.logits, feed_dict={model.document_placeholder: batch_docs})
+    batch_docnames, batch_docs, batch_docs, batch_segments, batch_label, batch_weight, batch_oracle_multiple, batch_reward_multiple = data.get_batch(((step-1)*FLAGS.batch_size), len(data.fileindices))
+    batch_logits = session.run(model.logits, feed_dict={model.document_placeholder: batch_docs,
+                                                        model.segment_placeholder: batch_segments,
+                                                        model.mask_placeholder: batch_masks})
     
     data_logits.append(batch_logits)
     data_labels.append(batch_label)
@@ -63,9 +68,9 @@ def batch_predict_with_a_model(data, model, session=None):
     # print(data_logits) 
     
   # Convert list to tensors
-  data_logits = tf.concat(0, data_logits)
-  data_lables = tf.concat(0, data_labels)
-  data_weights = tf.concat(0, data_weights)
+  data_logits = tf.concat(data_logits, 0)
+  data_lables = tf.concat(data_labels, 0)
+  data_weights = tf.concat(data_weights, 0)
   # print(data_logits,data_lables,data_weights)
   return data_logits, data_lables, data_weights 
 
@@ -86,14 +91,14 @@ def train():
       
       ### Prepare data for training
       print("Prepare vocab dict and read pretrained word embeddings ...")
-      vocab_dict, word_embedding_array = DataProcessor().prepare_vocab_embeddingdict()
+      # vocab_dict, word_embedding_array = DataProcessor().prepare_vocab_embeddingdict()
       # vocab_dict contains _PAD and _UNK but not word_embedding_array
-
+      vocab_dict = pickle.load(open("bert_vocab.pkl", "rb"))
       print("Prepare training data ...")
       train_data = DataProcessor().prepare_news_data(vocab_dict, data_type="training")
       
       print("Prepare validation data ...")
-      validation_data = DataProcessor().prepare_news_data(vocab_dict, data_type="validation")
+      validation_data = DataProcessor().prepare_news_data(vocab_dict, data_type="test")
 
       print("Prepare ROUGE reward generator ...")
       rouge_generator = Reward_Generator()
@@ -114,7 +119,7 @@ def train():
 
       # Initialize word embedding before training
       print("Initialize word embedding vocabulary with pretrained embeddings ...")
-      sess.run(model.vocab_embed_variable.assign(word_embedding_array))
+      #sess.run(model.vocab_embed_variable.assign(word_embedding_array))
 
       ########### Start (No Mixer) Training : Reinforcement learning ################
       # Reward aware training as part of Reward weighted CE ,  
@@ -138,9 +143,10 @@ def train():
           
         # Start Batch Training
         step = 1
+        loss  = []
         while (step * FLAGS.batch_size) <= len(train_data.fileindices):
           # Get batch data as Numpy Arrays
-          batch_docnames, batch_docs, batch_label, batch_weight, batch_oracle_multiple, batch_reward_multiple = train_data.get_batch(((step-1)*FLAGS.batch_size), 
+          batch_docnames, batch_docs, batch_segments, batch_masks, batch_label, batch_weight, batch_oracle_multiple, batch_reward_multiple = train_data.get_batch(((step-1)*FLAGS.batch_size), 
                                                                                                                                      (step * FLAGS.batch_size))
           # print(batch_docnames)
           # print(batch_label[0])
@@ -154,21 +160,25 @@ def train():
             
             ce_loss_val, ce_loss_sum, acc_val, acc_sum = sess.run([model.rewardweighted_cross_entropy_loss_multisample, model.rewardweighted_ce_multisample_loss_summary, 
                                                                    model.accuracy, model.taccuracy_summary],
-                                                                  feed_dict={model.document_placeholder: batch_docs, 
+                                                                  feed_dict={model.document_placeholder: batch_docs,
+                                                                             model.segment_placeholder: batch_segments,
+                                                                             model.mask_placeholder: batch_masks,
                                                                              model.predicted_multisample_label_placeholder: batch_oracle_multiple, 
                                                                              model.actual_reward_multisample_placeholder: batch_reward_multiple,
                                                                              model.label_placeholder: batch_label,
                                                                              model.weight_placeholder: batch_weight})
-            
+            loss.append(ce_loss_val)
             # Print Summary to Tensor Board
             model.summary_writer.add_summary(ce_loss_sum, ((epoch-1)*len(train_data.fileindices)+ step*FLAGS.batch_size))
             model.summary_writer.add_summary(acc_sum, ((epoch-1)*len(train_data.fileindices)+step*FLAGS.batch_size))
 
             print("MRT: Epoch "+str(epoch)+" : Covered " + str(step*FLAGS.batch_size)+"/"+str(len(train_data.fileindices)) + 
-                  " : Minibatch Reward Weighted Multisample CE Loss= {:.6f}".format(ce_loss_val) + " : Minibatch training accuracy= {:.6f}".format(acc_val))
+                  " : Minibatch Reward Weighted Multisample CE Loss= {:.6f}".format(np.mean(loss)) + " : Minibatch training accuracy= {:.6f}".format(acc_val))
 
           # Run optimizer: optimize policy network 
-          sess.run([model.train_op_policynet_expreward], feed_dict={model.document_placeholder: batch_docs, 
+          sess.run([model.train_op_policynet_expreward], feed_dict={model.document_placeholder: batch_docs,
+                                                                    model.segment_placeholder: batch_segments,
+                                                                    model.mask_placeholder: batch_masks,
                                                                     model.predicted_multisample_label_placeholder: batch_oracle_multiple, 
                                                                     model.actual_reward_multisample_placeholder: batch_reward_multiple,
                                                                     model.weight_placeholder: batch_weight})
@@ -176,10 +186,11 @@ def train():
           # Increase step
           step += 1
           
-          # if step == 20:
+          #if step == 20:
           #   break 
-
-        # Save Model 
+    
+        # Save Model
+    
         print("MRT: Epoch "+str(epoch)+" : Saving model after epoch completion")
         checkpoint_path = os.path.join(FLAGS.train_dir, "model.ckpt.epoch-"+str(epoch))
         model.saver.save(sess, checkpoint_path)
@@ -204,8 +215,8 @@ def train():
         print("MRT: Epoch "+str(epoch)+" : Writing final validation summaries")
         validation_data.write_prediction_summaries(validation_logits, "model.ckpt.epoch-"+str(epoch), session=sess)
         # Extimate Rouge Scores
-        rouge_score = rouge_generator.get_full_rouge(FLAGS.train_dir+"/model.ckpt.epoch-"+str(epoch)+".validation-summary-topranked", "validation")
-        print("MRT: Epoch "+str(epoch)+" : Validation ("+str(len(validation_data.fileindices))+") rouge= {:.6f}".format(rouge_score))
+        #rouge_score = rouge_generator.get_full_rouge(FLAGS.train_dir+"/model.ckpt.epoch-"+str(epoch)+".validation-summary-topranked", "validation")
+        #print("MRT: Epoch "+str(epoch)+" : Validation ("+str(len(validation_data.fileindices))+") rouge= {:.6f}".format(rouge_score))
         
         # break
 
@@ -243,12 +254,11 @@ def test():
       # sess.run(model.vocab_embed_variable.assign(word_embedding_array))
 
       # Select the model
-      if (os.path.isfile(FLAGS.train_dir+"/model.ckpt.epoch-"+str(FLAGS.model_to_load))):
-        selected_modelpath = FLAGS.train_dir+"/model.ckpt.epoch-"+str(FLAGS.model_to_load)
-      else:
-        print("Model not found in checkpoint folder.")
-        exit(0)
-      
+      #if (os.path.isfile(FLAGS.train_dir+"/model.ckpt.epoch-"+str(FLAGS.model_to_load))):
+      #  selected_modelpath = FLAGS.train_dir+"/model.ckpt.epoch-"+str(FLAGS.model_to_load)
+      #else:
+      #  print("Model not found in checkpoint folder.")
+      selected_modelpath = tf.train.latest_checkpoint(FLAGS.train_dir)
       # Reload saved model and test
       print("Reading model parameters from %s" % selected_modelpath)
       model.saver.restore(sess, selected_modelpath)

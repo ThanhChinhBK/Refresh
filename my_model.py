@@ -23,6 +23,7 @@ import time
 
 import numpy as np
 import tensorflow as tf
+import tensorflow_hub as hub
 
 import model_docsum
 from my_flags import FLAGS
@@ -33,15 +34,21 @@ import model_utils
 class MY_Model:
   def __init__(self, sess, vocab_size):
     dtype = tf.float16 if FLAGS.use_fp16 else tf.float32
-    
+    self.bert_module = hub.Module("https://tfhub.dev/google/bert_uncased_L-12_H-768_A-12/1", trainable=True)
     ### Few variables that has been initianlised here
     # Word embedding variable
-    self.vocab_embed_variable = model_utils.get_vocab_embed_variable(vocab_size)    
+    #self.vocab_embed_variable = model_utils.get_vocab_embed_variable(vocab_size)    
 
     ### Define Place Holders
     self.document_placeholder = tf.placeholder("int32", [None, 
-                                                         (FLAGS.max_doc_length + FLAGS.max_title_length + FLAGS.max_image_length), 
+                                                         (FLAGS.max_doc_length + FLAGS.max_title_length + FLAGS.max_image_length),
                                                          FLAGS.max_sent_length], name='doc-ph')
+    self.segment_placeholder = tf.placeholder("int32", [None, 
+                                                         (FLAGS.max_doc_length + FLAGS.max_title_length + FLAGS.max_image_length),
+                                                         FLAGS.max_sent_length], name='segment-ph')
+    self.mask_placeholder = tf.placeholder("int32", [None, 
+                                                         (FLAGS.max_doc_length + FLAGS.max_title_length + FLAGS.max_image_length),
+                                                         FLAGS.max_sent_length], name='mask-ph')
     self.label_placeholder = tf.placeholder(dtype, [None, FLAGS.max_doc_length, FLAGS.target_label_size], name='label-ph')
     self.weight_placeholder = tf.placeholder(dtype, [None, FLAGS.max_doc_length], name='weight-ph')
 
@@ -55,7 +62,10 @@ class MY_Model:
     self.logits_placeholder = tf.placeholder(dtype, [None, FLAGS.max_doc_length, FLAGS.target_label_size], name='logits-ph')
     
     ### Define Policy Core Network: Consists of Encoder, Decoder and Convolution.
-    self.extractor_output, self.logits = model_docsum.policy_network(self.vocab_embed_variable, self.document_placeholder, self.label_placeholder)
+    self.extractor_output, self.logits = model_docsum.policy_network(self.bert_module, 
+                                                                     self.document_placeholder, 
+                                                                     self.segment_placeholder, self.mask_placeholder,
+                                                                     self.label_placeholder)
     
     ### Define Reward-Weighted Cross Entropy Loss
     self.rewardweighted_cross_entropy_loss_multisample = model_docsum.reward_weighted_cross_entropy_loss_multisample(self.logits, self.predicted_multisample_label_placeholder,

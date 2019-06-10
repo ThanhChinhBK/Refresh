@@ -132,7 +132,9 @@ class Data:
         
         # For train, (endidx-startidx)=FLAGS.batch_size, for others its as specified
         batch_docnames = np.empty((endidx-startidx), dtype="S60") # File ID of size "cnn-" or "dailymail-" with fileid of size 40
-        batch_docs = np.empty(((endidx-startidx), (FLAGS.max_doc_length + FLAGS.max_title_length + FLAGS.max_image_length), FLAGS.max_sent_length), dtype="int32") 
+        batch_docs = np.empty(((endidx-startidx), (FLAGS.max_doc_length + FLAGS.max_title_length + FLAGS.max_image_length), FLAGS.max_sent_length), dtype="int32")
+        batch_segments = np.empty(((endidx-startidx), (FLAGS.max_doc_length + FLAGS.max_title_length + FLAGS.max_image_length), FLAGS.max_sent_length), dtype="int32")
+        batch_masks = np.empty(((endidx-startidx), (FLAGS.max_doc_length + FLAGS.max_title_length + FLAGS.max_image_length), FLAGS.max_sent_length), dtype="int32")
         batch_label = np.empty(((endidx-startidx), FLAGS.max_doc_length, FLAGS.target_label_size), dtype=dtype) # Single best oracle, used for JP models or accuracy estimation 
         batch_weight = np.empty(((endidx-startidx), FLAGS.max_doc_length), dtype=dtype) 
         batch_oracle_multiple = np.empty(((endidx-startidx), 1, FLAGS.max_doc_length, FLAGS.target_label_size), dtype=dtype)
@@ -145,26 +147,37 @@ class Data:
             
             # Document
             doc_wordids = [] # [FLAGS.max_doc_length + FLAGS.max_title_length + FLAGS.max_image_length, FLAGS.max_sent_length]
+            doc_segments = []
+            doc_masks = []
             for idx in range(FLAGS.max_doc_length):
                 thissent = []
                 if idx < len(self.docs[fileindex]):
                     thissent = self.docs[fileindex][idx][:]
+                doc_segments.append(process_to_chop_pad([1] * len(thissent),FLAGS.max_sent_length))
+                doc_masks.append(process_to_chop_pad([1] * len(thissent),FLAGS.max_sent_length))
                 thissent = process_to_chop_pad(thissent, FLAGS.max_sent_length) # [FLAGS.max_sent_length]
                 doc_wordids.append(thissent)
+                
             for idx in range(FLAGS.max_title_length):
                 thissent = []
                 if idx < len(self.titles[fileindex]):
                     thissent = self.titles[fileindex][idx][:]
+                doc_segments.append(process_to_chop_pad([1] * len(thissent),FLAGS.max_sent_length))
+                doc_masks.append(process_to_chop_pad([1] * len(thissent),FLAGS.max_sent_length))
                 thissent = process_to_chop_pad(thissent, FLAGS.max_sent_length) # [FLAGS.max_sent_length]
                 doc_wordids.append(thissent)
             for idx in range(FLAGS.max_image_length):
                 thissent = []
                 if idx < len(self.images[fileindex]):
                     thissent = self.images[fileindex][idx][:]
+                doc_segments.append(process_to_chop_pad([1] * len(thissent),FLAGS.max_sent_length))
+                doc_masks.append(process_to_chop_pad([1] * len(thissent),FLAGS.max_sent_length))
                 thissent = process_to_chop_pad(thissent, FLAGS.max_sent_length) # [FLAGS.max_sent_length]
+                
                 doc_wordids.append(thissent)
             batch_docs[batch_idx] = np.array(doc_wordids[:], dtype="int32")
-            
+            batch_segments[batch_idx] = np.array(doc_segments[:])
+            batch_masks[batch_idx] = np.array(doc_masks[:])
             # Labels: Select the single best
             labels_vecs = [[1, 0] if (item in self.labels[fileindex][0]) else [0, 1] for item in range(FLAGS.max_doc_length)]
             batch_label[batch_idx] = np.array(labels_vecs[:], dtype=dtype)
@@ -194,19 +207,19 @@ class Data:
             # increase batch count
             batch_idx += 1
 
-        return batch_docnames, batch_docs, batch_label, batch_weight, batch_oracle_multiple, batch_reward_multiple
+        return batch_docnames, batch_docs, batch_segments, batch_masks, batch_label, batch_weight, batch_oracle_multiple, batch_reward_multiple
 
     def shuffle_fileindices(self):
         random.shuffle(self.fileindices)
 
     def write_to_files(self, data_type):
         full_data_file_prefix = FLAGS.train_dir + "/" + FLAGS.data_mode + "." + data_type  
-        print("Writing data files with prefix (.filename, .doc, .title, .image, .label, .weight, .rewards): %s"%full_data_file_prefix)
+        print("Writing data files with prefix (.filename, .bert.doc, .bert.title, .bert.image, .label, .weight, .rewards): %s"%full_data_file_prefix)
 
         ffilenames = open(full_data_file_prefix+".filename", "w")
-        fdoc = open(full_data_file_prefix+".doc", "w")
-        ftitle = open(full_data_file_prefix+".title", "w")
-        fimage = open(full_data_file_prefix+".image", "w")
+        fdoc = open(full_data_file_prefix+".bert.doc", "w")
+        ftitle = open(full_data_file_prefix+".bert.title", "w")
+        fimage = open(full_data_file_prefix+".bert.image", "w")
         flabel = open(full_data_file_prefix+".label", "w")
         fweight = open(full_data_file_prefix+".weight", "w")
         freward = open(full_data_file_prefix+".reward", "w")
@@ -231,12 +244,12 @@ class Data:
     def populate_data(self, vocab_dict, data_type):
 
         full_data_file_prefix = FLAGS.preprocessed_data_directory + "/" + FLAGS.data_mode + "." + data_type
-        print("Data file prefix (.doc, .title, .image, .label.multipleoracle): %s"%full_data_file_prefix)
+        print("Data file prefix (.bert.doc, .bert,title, .bert.image, .label.multipleoracle): %s"%full_data_file_prefix)
         
         # Process doc, title, image, label
-        doc_data_list = open(full_data_file_prefix+".doc").read().strip().split("\n\n")
-        title_data_list = open(full_data_file_prefix+".title").read().strip().split("\n\n")
-        image_data_list = open(full_data_file_prefix+".image").read().strip().split("\n\n")
+        doc_data_list = open(full_data_file_prefix+".bert.doc").read().strip().split("\n\n")
+        title_data_list = open(full_data_file_prefix+".bert.title").read().strip().split("\n\n")
+        image_data_list = open(full_data_file_prefix+".bert.image").read().strip().split("\n\n")
         label_data_list = open(full_data_file_prefix+".label.multipleoracle").read().strip().split("\n\n") 
         
         print("Data sizes: %d %d %d %d"%(len(doc_data_list), len(title_data_list), len(image_data_list), len(label_data_list)))
@@ -300,7 +313,7 @@ class Data:
             doccount += 1
 
         # Set Fileindices
-        self.fileindices = range(len(self.filenames))
+        self.fileindices = list(range(len(self.filenames)))
 
 class DataProcessor:
     def prepare_news_data(self, vocab_dict, data_type="training"):
@@ -315,9 +328,9 @@ class DataProcessor:
         word_embedding_array = []
         
         # Add padding
-        vocab_dict["_PAD"] = PAD_ID
+        vocab_dict["[PAD]"] = PAD_ID
         # Add UNK
-        vocab_dict["_UNK"] = UNK_ID
+        vocab_dict["[UNK]"] = UNK_ID
         
         # Read word embedding file
         wordembed_filename = FLAGS.pretrained_wordembedding

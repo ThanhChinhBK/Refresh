@@ -38,7 +38,7 @@ tf.app.flags.DEFINE_string("data_mode",  "cnn", "cnn or dailymail or cnn-dailyma
 
 ### Pretrained wordembeddings features
 
-tf.app.flags.DEFINE_integer("wordembed_size", 200, "Size of wordembedding (<= 200).")
+tf.app.flags.DEFINE_integer("wordembed_size", 768, "Size of wordembedding (<= 200).")
 
 tf.app.flags.DEFINE_boolean("trainable_wordembed", False, "Is wordembedding trainable?") 
 # UNK and PAD are always trainable and non-trainable respectively.
